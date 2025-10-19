@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Classroom Clicker</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PeerJS for WebRTC -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <!-- Chart.js for live results -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- QR Code Generator -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex items-center justify-center min-h-screen p-4">
+
+    <div id="app-container" class="w-full max-w-4xl mx-auto">
+
+        <!-- Role Selection (Initial View) -->
+        <div id="role-selector" class="text-center bg-gray-800 p-8 rounded-xl shadow-2xl">
+            <h1 class="text-4xl font-bold text-cyan-400 mb-6">Live Classroom Clicker</h1>
+            <p class="text-lg text-gray-300 mb-8">Choose your role to begin.</p>
+            <div class="flex flex-col sm:flex-row justify-center gap-4">
+                <button id="teacher-btn" class="bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-3 px-6 rounded-lg text-xl transition-transform transform hover:scale-105">👩‍🏫 I am the Teacher</button>
+                <button id="student-btn" class="bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-3 px-6 rounded-lg text-xl transition-transform transform hover:scale-105">🧑‍🎓 I am a Student</button>
+            </div>
+        </div>
+
+        <!-- Teacher View -->
+        <div id="teacher-view" class="hidden">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Left Panel: Controls & QR Code -->
+                <div class="bg-gray-800 p-6 rounded-xl shadow-lg">
+                    <h2 class="text-2xl font-bold text-cyan-400 border-b border-gray-700 pb-3 mb-4">Teacher Dashboard</h2>
+                    <div class="mb-4">
+                        <label for="question-input" class="block text-sm font-medium text-gray-400 mb-1">Question</label>
+                        <input type="text" id="question-input" class="w-full bg-gray-700 text-white rounded-md p-2 border border-gray-600 focus:ring-2 focus:ring-cyan-500 focus:outline-none" placeholder="What is 2 + 2?">
+                    </div>
+                    <div id="options-container">
+                        <!-- Options will be added here -->
+                    </div>
+                    <div class="flex justify-between items-center mt-4">
+                         <button id="add-option-btn" class="bg-gray-600 hover:bg-gray-700 text-white font-semibold py-2 px-4 rounded-lg text-sm">Add Option</button>
+                         <button id="broadcast-btn" class="bg-cyan-500 hover:bg-cyan-600 font-bold py-2 px-5 rounded-lg">Broadcast</button>
+                    </div>
+                    <div class="mt-6 pt-4 border-t border-gray-700 text-center">
+                        <h3 class="text-lg font-semibold text-gray-300">Students Join Here:</h3>
+                        <div id="qr-code" class="flex justify-center items-center bg-white p-2 rounded-lg w-48 h-48 mx-auto mt-2"></div>
+                        <p class="text-xs text-gray-500 mt-2">Scan with a phone camera</p>
+                        <p id="connection-status" class="mt-2 text-sm text-yellow-400">Connecting to server...</p>
+                        <p id="student-count" class="text-sm text-gray-400">Connected Students: 0</p>
+                    </div>
+                </div>
+                <!-- Right Panel: Live Results -->
+                <div class="bg-gray-800 p-6 rounded-xl shadow-lg">
+                    <h2 class="text-2xl font-bold text-indigo-400 mb-4">Live Results</h2>
+                    <div class="relative h-96">
+                        <canvas id="results-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Student View -->
+        <div id="student-view" class="hidden text-center bg-gray-800 p-8 rounded-xl shadow-2xl">
+            <div id="student-connect-view">
+                 <h2 class="text-2xl font-bold text-indigo-400 mb-4">Join Session</h2>
+                 <p class="mb-4 text-gray-300">Enter the Teacher's Connection ID or scan their QR code.</p>
+                 <input type="text" id="teacher-id-input" class="w-full max-w-sm mx-auto bg-gray-700 text-white rounded-md p-3 text-center border border-gray-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none" placeholder="Teacher ID">
+                 <button id="connect-btn" class="mt-4 bg-indigo-500 hover:bg-indigo-600 font-bold py-2 px-8 rounded-lg text-lg">Connect</button>
+                 <p id="student-connection-status" class="mt-4 text-yellow-400">Waiting to connect...</p>
+            </div>
+            <div id="student-question-view" class="hidden">
+                 <h2 id="student-question-text" class="text-2xl font-bold text-gray-200 mb-6">Waiting for question...</h2>
+                 <div id="student-options-container" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                     <!-- Answer buttons will appear here -->
+                 </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // DOM Elements
+    const roleSelector = document.getElementById('role-selector');
+    const teacherBtn = document.getElementById('teacher-btn');
+    const studentBtn = document.getElementById('student-btn');
+
+    const teacherView = document.getElementById('teacher-view');
+    const studentView = document.getElementById('student-view');
+
+    // --- Global State ---
+    let peer;
+    let teacherId = null;
+    let connections = new Map();
+    let chart;
+    let pollData = { question: '', options: [], results: [] };
+
+    // --- Initialization ---
+    function initialize() {
+        const urlParams = new URLSearchParams(window.location.search);
+        teacherId = urlParams.get('teacherId');
+        if (teacherId) {
+            setupStudent();
+        }
+        teacherBtn.addEventListener('click', setupTeacher);
+        studentBtn.addEventListener('click', () => { if (!teacherId) setupStudent(); });
+    }
+    
+    // --- Teacher Logic ---
+    function setupTeacher() {
+        roleSelector.classList.add('hidden');
+        teacherView.classList.remove('hidden');
+
+        // =========================================================================
+        // == CONFIGURATION FOR YOUR GOOGLE CLOUD RUN SERVER ==
+        // =========================================================================
+        peer = new Peer(undefined, {
+            host: 'wrt-mvp-147708164583.europe-west1.run.app',
+            path: '/peerjs/myapp',
+            secure: true
+        });
+        
+        peer.on('open', (id) => {
+            console.log('Teacher Peer ID:', id);
+            const joinUrl = `${window.location.origin}${window.location.pathname}?teacherId=${id}`;
+            const qrCanvasContainer = document.getElementById('qr-code');
+            qrCanvasContainer.innerHTML = ''; // Clear previous QR code if any
+            QRCode.toCanvas(qrCanvasContainer.appendChild(document.createElement('canvas')), joinUrl, { width: 180 }, (error) => {
+                if (error) console.error(error);
+            });
+            document.getElementById('connection-status').textContent = 'Ready for connections!';
+            document.getElementById('connection-status').classList.replace('text-yellow-400', 'text-green-400');
+        });
+
+        peer.on('error', (err) => {
+            console.error("PeerJS Error:", err);
+            document.getElementById('connection-status').textContent = 'Connection Error. Please refresh.';
+            document.getElementById('connection-status').classList.replace('text-yellow-400', 'text-red-500');
+        });
+
+        peer.on('connection', (conn) => {
+            connections.set(conn.peer, conn);
+            updateStudentCount();
+            conn.on('data', (data) => { if (data.type === 'vote') handleVote(data.payload.optionIndex); });
+            conn.on('close', () => { connections.delete(conn.peer); updateStudentCount(); });
+        });
+
+        initializeChart();
+        document.getElementById('broadcast-btn').addEventListener('click', broadcastQuestion);
+        document.getElementById('add-option-btn').addEventListener('click', addOptionInput);
+        addOptionInput(); addOptionInput();
+    }
+
+    function addOptionInput() {
+        const container = document.getElementById('options-container');
+        const newOption = document.createElement('input');
+        newOption.type = 'text';
+        newOption.className = 'w-full bg-gray-700 text-white rounded-md p-2 mt-2 border border-gray-600 focus:ring-2 focus:ring-cyan-500 focus:outline-none';
+        newOption.placeholder = `Option ${container.children.length + 1}`;
+        container.appendChild(newOption);
+    }
+
+    function broadcastQuestion() {
+        const question = document.getElementById('question-input').value;
+        const options = Array.from(document.querySelectorAll('#options-container input')).map(input => input.value).filter(val => val.trim() !== '');
+        if (!question || options.length < 2) return alert('Please enter a question and at least two options.');
+        pollData = { question, options, results: new Array(options.length).fill(0) };
+        connections.forEach(conn => conn.send({ type: 'question', payload: { question, options } }));
+        updateChart();
+    }
+    
+    function handleVote(optionIndex) {
+        if (optionIndex >= 0 && optionIndex < pollData.results.length) {
+            pollData.results[optionIndex]++;
+            updateChart();
+        }
+    }
+
+    function updateStudentCount() {
+        document.getElementById('student-count').textContent = `Connected Students: ${connections.size}`;
+    }
+
+    function initializeChart() {
+        const ctx = document.getElementById('results-chart').getContext('2d');
+        chart = new Chart(ctx, { type: 'bar', data: { labels: [], datasets: [{ label: '# of Votes', data: [], backgroundColor: 'rgba(74, 222, 128, 0.6)', borderColor: 'rgba(74, 222, 128, 1)', borderWidth: 1 }] }, options: { indexAxis: 'y', scales: { x: { beginAtZero: true, ticks: { color: '#9ca3af', stepSize: 1 }, grid: { color: '#4b5563' } }, y: { ticks: { color: '#d1d5db', font: { size: 14 } }, grid: { color: '#4b5563' } } }, plugins: { legend: { display: false } }, maintainAspectRatio: false } });
+    }
+
+    function updateChart() {
+        chart.data.labels = pollData.options;
+        chart.data.datasets[0].data = pollData.results;
+        chart.update();
+    }
+
+    function setupStudent() {
+        roleSelector.classList.add('hidden');
+        studentView.classList.remove('hidden');
+        peer = new Peer();
+        const connectView = document.getElementById('student-connect-view');
+        const questionView = document.getElementById('student-question-view');
+        const statusEl = document.getElementById('student-connection-status');
+        
+        const connectToTeacher = (id) => {
+            if (!id) return;
+            const conn = peer.connect(id);
+            conn.on('open', () => {
+                statusEl.textContent = 'Connected! Waiting for question...';
+                statusEl.className = 'mt-4 text-green-400';
+                connectView.classList.add('hidden');
+                questionView.classList.remove('hidden');
+            });
+            conn.on('data', (data) => { if (data.type === 'question') displayQuestion(data.payload, conn); });
+            conn.on('close', () => { statusEl.textContent = 'Disconnected. Please refresh.'; statusEl.className = 'mt-4 text-red-500'; questionView.classList.add('hidden'); connectView.classList.remove('hidden'); });
+        };
+
+        if (teacherId) {
+            document.getElementById('teacher-id-input').value = teacherId;
+            connectToTeacher(teacherId);
+        }
+        document.getElementById('connect-btn').addEventListener('click', () => connectToTeacher(document.getElementById('teacher-id-input').value.trim()));
+    }
+
+    function displayQuestion({ question, options }, conn) {
+        document.getElementById('student-question-text').textContent = question;
+        const optionsContainer = document.getElementById('student-options-container');
+        optionsContainer.innerHTML = '';
+        options.forEach((option, index) => {
+            const button = document.createElement('button');
+            button.className = 'bg-gray-700 hover:bg-cyan-500 text-white font-semibold py-4 px-4 rounded-lg text-lg transition-colors';
+            button.textContent = option;
+            button.onclick = () => {
+                conn.send({ type: 'vote', payload: { optionIndex: index } });
+                optionsContainer.innerHTML = `<p class="md:col-span-2 text-2xl text-green-400">Vote submitted!</p>`;
+            };
+            optionsContainer.appendChild(button);
+        });
+    }
+    
+    initialize();
+});
+</script>
+</body>
+</html>
